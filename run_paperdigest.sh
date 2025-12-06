@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -e  # stop on errors
 
-APP_FILE="app_openalex_v3_strict_ui2.py"
+APP_FILE="app.py"
 VENV_DIR="venv"
 
 # Create venv if missing
