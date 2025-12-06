@@ -1,0 +1,17 @@
+# Python debris
+__pycache__/
+*.py[cod]
+
+# Virtual Environment (very common to accidentally push)
+venv/
+env/
+.env
+
+deprecated/
+
+# Mac system files
+.DS_Store
+
+# IDE settings
+.vscode/
+.idea/
