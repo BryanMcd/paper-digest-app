@@ -1,4 +1,4 @@
-# app_openalex_v3_strict_ui_fixed_v3.py
+# app.py
 import os, re, html, asyncio
 from typing import List, Dict, Any, Set
 from fastapi import FastAPI
