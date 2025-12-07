@@ -18,7 +18,7 @@ echo "Installing dependencies"
 pip install -q fastapi==0.115.2 uvicorn==0.30.6 httpx==0.27.2
 
 # Export mailto (edit for your lab email)
-export PD_MAILTO="bryanmcd92@gmail.com"
+export PD_MAILTO="${PD_MAILTO:-your_email@example.com}"
 
 # Launch server
 echo "Starting Paper Digest app"
