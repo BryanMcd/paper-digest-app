@@ -113,7 +113,12 @@ INDEX_HTML = """
     a{color:#0b57d0;text-decoration:none} a:hover{text-decoration:underline}
     .error{background:#fff5f5;color:#b00020;border:1px solid #f2c9c9;padding:10px;border-radius:12px;margin-bottom:12px;font-size:13px;white-space:pre-wrap}
     .pill{display:inline-block;padding:2px 8px;border-radius:999px;border:1px solid #ddd;font-size:12px; background:#f4f4f4}
-    textarea{width:100%;height:120px; resize: vertical;}
+    textarea{
+        width:100%;
+        height:120px; 
+        box-sizing:border-box; /* Includes padding in height calc */
+        display:block;         /* Removes invisible space at the bottom */
+        }
     .selected{box-shadow:0 0 0 2px #111; border-color:#111}
     .status{margin:10px 0;padding:8px 12px;border:1px solid #eee;border-radius:10px;background:#fafafa;font-size:13px}
     .mobile-close { display: none; width: 100%; background: #eee; color: #333; border: none; font-weight: bold;}
@@ -127,9 +132,9 @@ INDEX_HTML = """
     <div class="controls" style="margin-top:10px">
       <label class="muted">Days back<br><input id="days" type="number" value="120"></label>
       <label class="muted">Per journal<br><input id="per" type="number" value="20"></label>
-      <label class="muted"><input id="demo" type="checkbox"> Demo</label>
-      <label class="muted" style="grid-column:span 3">Journals (one per line)<br><textarea id="journals"></textarea></label>
-      <button id="fetchBtn">Fetch Papers</button>
+      <div></div>
+      <label class="muted" style="grid-column:span 2">Journals (one per line)<br><textarea id="journals"></textarea></label>
+      <button id="fetchBtn" style="height:120px; align-self:end;">Fetch Papers</button>
     </div>
   </div>
 </header>
@@ -176,7 +181,6 @@ const elAside=document.getElementById('abstractAside');
 const elError=document.getElementById('error');
 const elDays=document.getElementById('days');
 const elPer=document.getElementById('per');
-const elDemo=document.getElementById('demo');
 const elJournals=document.getElementById('journals');
 const elBtn=document.getElementById('fetchBtn');
 
@@ -237,16 +241,6 @@ async function fetchAll(){
     elError.innerHTML=""; selected=null; renderAbstract();
     records = []; renderLatest();
     setStatus("Fetching...");
-
-    if(elDemo.checked){
-      records = [
-        {id:'d1', title:'IL-2 signaling dynamics in human Tregs', abstract:'Demo abstract...', doi:'10.1000/demo.il2', url:'https://doi.org/10.1000/demo.il2', published:'2025-10-20', journal:'Immunity'},
-        {id:'d2', title:'Engineered CAR-Tregs suppress alloimmunity in mice', abstract:'Demo abstract...', doi:'10.1000/demo.cartreg', url:'https://doi.org/10.1000/demo.cartreg', published:'2025-10-19', journal:'Nature Medicine'},
-      ];
-      renderLatest(); 
-      elBtn.disabled = false;
-      return;
-    }
 
     const since = isoSince(elDays.value);
     const per = Number(elPer.value||20);
