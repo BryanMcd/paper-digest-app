@@ -19,7 +19,7 @@ bash install.sh
 
 ### 2. Run the app
 
-    **Note:** You must provide your email address to authenticate with the OpenAlex API (this puts you in the "Polite Pool" for faster access).
+>**Note:** You must provide your email address to authenticate with the OpenAlex API (this puts you in the "Polite Pool" for faster access).
 
 ```bash
 # Replace with your actual email
