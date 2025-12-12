@@ -8,7 +8,7 @@ A simple app to aggregate research papers from your favorite journals.
 
 Clone the repository and enter the directory:
 ```bash
-git clone [https://github.com/BryanMcd/paper-digest-app](https://github.com/BryanMcd/paper-digest-app)
+git clone https://github.com/BryanMcd/paper-digest-app
 cd paper-digest-app
 ```
 
