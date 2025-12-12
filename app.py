@@ -128,7 +128,7 @@ INDEX_HTML = """
 <header>
   <div class="wrap">
     <h1>Paper Digest</h1>
-    <div class="muted">Research-only; select a paper to view abstract.</div>
+    <div class="muted">Select a paper to view abstract.</div>
     <div class="controls" style="margin-top:10px">
       <label class="muted">Days back<br><input id="days" type="number" value="120"></label>
       <label class="muted">Per journal<br><input id="per" type="number" value="20"></label>
