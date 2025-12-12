@@ -35,12 +35,22 @@ fi
 
 # Launch server
 echo "Starting Paper Digest app"
-uvicorn ${APP_FILE%.*}:app --reload --port 8000 &
+
+# If running inside Docker, listen on 0.0.0.0 (required for external access)
+# If running on a normal Mac/PC, listen on 127.0.0.1 (safer, prevents firewall popups)
+if [ -f "/.dockerenv" ]; then
+    HOST_IP="0.0.0.0"
+    echo "🐳 Docker environment detected. Listening on 0.0.0.0"
+else
+    HOST_IP="127.0.0.1"
+fi
+
+uvicorn ${APP_FILE%.*}:app --host "$HOST_IP" --port 8000 --reload &
 
 PID=$!
 sleep 2
 
-# Open browser automatically
+# Open browser (Mac only)
 if command -v open >/dev/null; then
   open "http://127.0.0.1:8000"
 elif command -v xdg-open >/dev/null; then
