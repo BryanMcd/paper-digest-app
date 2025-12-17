@@ -65,34 +65,39 @@ INDEX_HTML = """
     header{position:sticky;top:0;background:rgba(255,255,255,.95);border-bottom:1px solid #eee; z-index: 100;}
     .wrap{max-width:1100px;margin:0 auto;padding:16px}
     h1{font-size:22px;margin:0 0 4px}
-    .controls{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:8px}
+    /* REVERTED GRID: Back to original columns (Keywords joined the 2nd column) */
+    .controls {
+        display: grid; 
+        grid-template-columns: auto auto 1fr 300px auto; 
+        gap: 12px; 
+        align-items: end; /* Aligns everything to the bottom */
+    }
     input,button,textarea{padding:8px 10px;border:1px solid #ddd;border-radius:12px;font-family:inherit}
     button{background:#111;color:#fff;border-color:#111;cursor:pointer}
     button:disabled{opacity:0.5;cursor:not-allowed}
     
     main{display:grid;grid-template-columns:3fr 2fr;gap:24px; position: relative;}
     
-    /* Desktop Sidebar */
     aside {
-      position: fixed;
-      right: 0;
-      top: 240px; /* approximates header height */
-      width: 35%; 
-      height: calc(100vh - 240px);
-      overflow-y: auto;
-      background: #fff;
-      box-shadow: -4px 0 12px rgba(0,0,0,0.05);
-      border-left: 1px solid #eee;
-      padding: 20px;
-      z-index: 50;
+        position: fixed;
+        right: 0;
+        top: 230px;      /* Slight tweak to match new header height */
+        bottom: 0;       /* <--- FIX: Anchors it to the bottom of the viewport */
+        width: 35%; 
+        overflow-y: auto;
+        background: #fff;
+        box-shadow: -4px 0 12px rgba(0,0,0,0.05);
+        border-left: 1px solid #eee;
+        padding: 20px;
+        padding-bottom: 40px; /* Extra breathing room for the button */
+        z-index: 50;
     }
     
-    /* Mobile Responsive Styles */
     @media (max-width: 900px){
       main{grid-template-columns:1fr} 
       .controls{grid-template-columns:repeat(2,minmax(0,1fr))}
       aside {
-        display: none; /* Hidden by default on mobile */
+        display: none; 
         position: fixed;
         top: 0; left: 0; right: 0; bottom: 0;
         width: 100%; height: 100%;
@@ -130,11 +135,30 @@ INDEX_HTML = """
     <h1>Paper Digest</h1>
     <div class="muted">Select a paper to view abstract.</div>
     <div class="controls" style="margin-top:10px">
-      <label class="muted">Days back<br><input id="days" type="number" value="120"></label>
-      <label class="muted">Per journal<br><input id="per" type="number" value="20"></label>
+      
+      <div style="display:flex; flex-direction:column; justify-content:space-between; height:110px">
+        <label class="muted">Days back<br><input id="days" type="number" value="120" style="width:70px"></label>
+        <label class="muted">Per journal<br><input id="per" type="number" value="20" style="width:70px"></label>
+      </div>
+      
+      <div style="display:flex; flex-direction:column; justify-content:space-between; height:90px">
+        <label class="muted" style="cursor:pointer; display:block; padding-top:4px">
+            <input id="news" type="checkbox" style="margin-right:4px; vertical-align:middle"> Include News
+        </label>
+        
+        <label class="muted">Keywords<br>
+            <div style="display:flex; gap:4px">
+                <input id="keywords" type="text" placeholder="e.g. ARID1A" style="width:125px">
+                <button onclick="document.getElementById('keywords').value=''" style="padding:0; width:25px; background:#f4f4f4; color:#333; border:1px solid #ddd; font-size:16px; line-height:1" title="Clear">×</button>
+            </div>
+        </label>
+      </div>
+      
       <div></div>
-      <label class="muted" style="grid-column:span 2">Journals (one per line)<br><textarea id="journals"></textarea></label>
-      <button id="fetchBtn" style="height:120px; align-self:end;">Fetch Papers</button>
+
+      <label class="muted">Journals<br><textarea id="journals" style="width:100%"></textarea></label>
+      
+      <button id="fetchBtn" style="height:120px;">Fetch Papers</button>
     </div>
   </div>
 </header>
@@ -181,6 +205,8 @@ const elAside=document.getElementById('abstractAside');
 const elError=document.getElementById('error');
 const elDays=document.getElementById('days');
 const elPer=document.getElementById('per');
+const elNews=document.getElementById('news');
+const elKw=document.getElementById('keywords');
 const elJournals=document.getElementById('journals');
 const elBtn=document.getElementById('fetchBtn');
 
@@ -244,12 +270,13 @@ async function fetchAll(){
 
     const since = isoSince(elDays.value);
     const per = Number(elPer.value||20);
+    const kw = elKw.value.trim();
     const list = elJournals.value.split(/\\n+/).map(s=>s.trim()).filter(Boolean);
     
     // Parallel Fetching
     const promises = list.map(j => {
         if(j.toLowerCase().includes("biorxiv")) return null;
-        return defFetch("openalex_journal", {name:j, since:since, per:per})
+        return defFetch("openalex_journal", {name:j, since:since, per:per, news:elNews.checked, keywords:kw})
             .then(data => ({ status: 'fulfilled', value: data, journal: j }))
             .catch(err => ({ status: 'rejected', reason: err, journal: j }));
     }).filter(Boolean);
@@ -315,6 +342,16 @@ async function fetchAll(){
       elBtn.disabled = false;
   }
 }
+
+[elDays, elPer, elKw, elJournals].forEach(el => {
+  el.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+       e.preventDefault();
+       elBtn.click(); // Triggers the same click animation/logic
+    }
+  });
+});
+
 document.getElementById('fetchBtn').onclick = fetchAll;
 </script>
 </body>
@@ -360,7 +397,7 @@ def _jats_to_text(jats: str) -> str:
     txt = JATS_TAG_RE.sub("", jats)
     return html.unescape(txt).strip()
 
-async def _crossref_recent_by_issn(issns: List[str], since_iso: str, want: int = 20, max_pages: int = 3) -> List[Dict[str, Any]]:
+async def _crossref_recent_by_issn(issns: List[str], since_iso: str, want: int = 20, max_pages: int = 3, keywords: str = "") -> List[Dict[str, Any]]:
     if not issns:
         return []
     target_issn = issns[0]
@@ -380,6 +417,10 @@ async def _crossref_recent_by_issn(issns: List[str], since_iso: str, want: int =
                 "cursor": cursor,
                 "mailto": CONTACT,
             }
+            # Add query if keywords exist
+            if keywords:
+                params["query"] = keywords
+
             try:
                 r = await client.get(url, params=params)
                 if r.status_code != 200:
@@ -471,28 +512,44 @@ async def _collect_research(params: dict, want: int, is_research_fn, max_pages: 
             break
     return results[:want]
 
-def is_probably_research(work: dict) -> bool:
+def is_valid_article(work: dict, allow_news: bool = False) -> bool:
+    # 1. Always filter out pure junk (Errata, Retractions, etc.)
+    genre = (work.get("type_crossref") or work.get("type") or "").lower()
+    if any(k in genre for k in ["retraction", "correction", "erratum", "addendum"]):
+        return False
+
     title = (work.get("title") or "").lower()
+    
+    # 2. If News is ALLOWED, we return True here (skipping the strict checks)
+    if allow_news:
+        return True
+
+    # --- STRICT MODE (Research Only) ---
+    
+    # Filter out News/Editorials by Title
     if NON_RESEARCH_TITLE_RE.search(title):
         return False
-    genre = (work.get("type_crossref") or work.get("type") or "").lower()
-    if any(k in genre for k in ["editorial", "news", "comment", "retraction", "correction", "erratum", "addendum", "book-review"]):
+        
+    # Filter out News/Editorials by Type
+    if any(k in genre for k in ["editorial", "news", "comment", "book-review"]):
         return False
     
+    # Filter by Abstract Length
+    abstract = work.get("abstract_inverted_index") or work.get("abstract")
+    length = 0
+    if isinstance(abstract, str):
+        length = len(abstract)
+    elif isinstance(abstract, dict):
+        length = len(abstract)
+
     venue = (work.get("host_venue") or {}).get("display_name") or ""
-    # Try primary_location if host_venue is empty (OpenAlex)
     if not venue:
         venue = ((work.get("primary_location") or {}).get("source") or {}).get("display_name") or ""
         
     if venue.lower().strip() in ABSTRACT_LEN_WHITELIST:
-        return True
-        
-    abstract = work.get("abstract_inverted_index") or work.get("abstract")
-    if isinstance(abstract, str):
-        return len(abstract) >= 50
-    if isinstance(abstract, dict):
-        return len(abstract) >= 10
-    return False
+        return length >= 20 
+
+    return length >= 50
 
 # ------------ Data Normalization for Frontend ------------
 def _normalize_work(w: Dict[str, Any], fallback_journal: str = "") -> Dict[str, Any]:
@@ -544,35 +601,58 @@ def _normalize_work(w: Dict[str, Any], fallback_journal: str = "") -> Dict[str, 
 
 # ------------ API route ------------
 @app.get("/api/openalex_journal")
-async def api_openalex_journal(name: str, since: str, per: int = 20):
-    # 1. Resolve ISSNs (Static Cache OR Dynamic Fetch)
+async def api_openalex_journal(name: str, since: str, per: int = 20, news: bool = False, keywords: str = ""):
+    # 1. Resolve ISSNs
     issns = await _get_issns_dynamic(name)
 
+    # 2. Build the OpenAlex Filter String
+    # If news is allowed, we remove the strict type exclusions
+    type_filter = "type:article,"
+    if not news:
+        type_filter += "type_crossref:!editorial|news-item|comment|letter|book-review|retraction|correction|erratum|addendum"
+    else:
+        # If allowing news, still exclude pure errors/retractions
+        type_filter += "type_crossref:!retraction|correction|erratum|addendum"
+
+    search_filter = f",is_paratext:false,{type_filter}"
+    
+    # NEW: Add keyword search to OpenAlex filter
+    if keywords:
+        search_filter += f",title_and_abstract.search:{keywords}"
+
+    # 3. Apply the filter to the queries
     ox_filters = [
-        {"filter": f"locations.source.issn:{'|'.join(issns)},from_publication_date:{since}{STRICT_RESEARCH}", "sort": "publication_date:desc"} if issns else None,
-        {"filter": f"locations.source.display_name.search:{name},from_publication_date:{since}{STRICT_RESEARCH}", "sort": "publication_date:desc"},
-        {"filter": f"locations.source.issn:{'|'.join(issns)},from_created_date:{since}{STRICT_RESEARCH}", "sort": "publication_date:desc"} if issns else None,
-        {"filter": f"locations.source.display_name.search:{name},from_created_date:{since}{STRICT_RESEARCH}", "sort": "publication_date:desc"},
+        {"filter": f"locations.source.issn:{'|'.join(issns)},from_publication_date:{since}{search_filter}", "sort": "publication_date:desc"} if issns else None,
+        {"filter": f"locations.source.display_name.search:{name},from_publication_date:{since}{search_filter}", "sort": "publication_date:desc"},
+        {"filter": f"locations.source.issn:{'|'.join(issns)},from_created_date:{since}{search_filter}", "sort": "publication_date:desc"} if issns else None,
+        {"filter": f"locations.source.display_name.search:{name},from_created_date:{since}{search_filter}", "sort": "publication_date:desc"},
     ]
+    
     ox_results: List[Dict[str, Any]] = []
 
-    # 2. OpenAlex Collection
+    # 4. Fetch OpenAlex (Use our updated validator)
     for q in [p for p in ox_filters if p]:
         if len(ox_results) >= per:
             break
         need = per - len(ox_results)
-        ox_results += await _collect_research(q, need, is_probably_research, max_pages=6)
+        # Pass a lambda that includes the 'news' flag
+        ox_results += await _collect_research(q, need, lambda w: is_valid_article(w, allow_news=news), max_pages=6)
 
-    # 3. Crossref Fallback (requires ISSNs)
+    # 5. Crossref Fallback
     if len(ox_results) < per and issns:
         need = per - len(ox_results)
-        cr = await _crossref_recent_by_issn(issns, since_iso=since, want=need, max_pages=2)
-        ox_results += cr
+        # If news is ON, we don't need to over-fetch as much (we keep more)
+        want_count = need if news else need * 2
+        
+        # Pass keywords to Crossref helper
+        cr = await _crossref_recent_by_issn(issns, since_iso=since, want=want_count, max_pages=2, keywords=keywords)
+        
+        # Filter using the same logic
+        cr_filtered = [w for w in cr if is_valid_article(w, allow_news=news)]
+        
+        ox_results += cr_filtered[:need]
 
     merged = _dedupe_on_ids_and_doi(ox_results)
-    
-    # 4. NORMALIZE BEFORE SENDING TO FRONTEND
-    # Pass 'name' as fallback_journal so "Unknown Journal" becomes "The Lancet" (or whatever was searched)
     normalized = [_normalize_work(w, fallback_journal=name) for w in merged]
     
     normalized.sort(key=lambda w: str(w.get("published") or ""), reverse=True)
