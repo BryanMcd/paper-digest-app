@@ -179,6 +179,8 @@ INDEX_HTML = """
   </main>
   <footer class="muted" style="margin:20px 0">
     Data from <a href="https://docs.openalex.org/" target="_blank">OpenAlex</a>.
+    <br>
+    Github repo: <a href="https://github.com/BryanMcd/paper-digest-app" target="_blank">paperdigest</a>.
   </footer>
 </div>
 <script>
