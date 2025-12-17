@@ -122,9 +122,9 @@ INDEX_HTML = """
     </aside>
   </main>
   <footer class="muted" style="margin:20px 0">
-    Data from <a href="https://docs.openalex.org/" target="_blank">OpenAlex</a>.
+    Data from <a href="https://docs.openalex.org/" target="_blank">OpenAlex</a>
     <br>
-    Github repo: <a href="https://github.com/BryanMcd/paper-digest-app" target="_blank">paperdigest</a>.
+    Github repo: <a href="https://github.com/BryanMcd/paper-digest-app" target="_blank">paperdigest</a>
   </footer>
 </div>
 <script>
@@ -356,7 +356,6 @@ async def api_openalex_journal(name: str, since: str, per: int = 20, news: bool 
     issns = await _get_issns(name)
     
     # 3. PERFORMANCE: Build filter string strictly.
-    # We still use the API to do the "heavy lifting" filtering first
     type_filter = "type:article|review,is_paratext:false" 
     if not news:
         type_filter += ",type_crossref:!editorial|news-item|comment|letter|book-review|retraction|correction"
@@ -382,16 +381,31 @@ async def api_openalex_journal(name: str, since: str, per: int = 20, news: bool 
         "mailto": CONTACT
     }
 
-    raw_results = await _collect_openalex(query_params, want=per, allow_news=news)
+    # Fetch slightly more than needed to account for duplicates we might drop
+    raw_results = await _collect_openalex(query_params, want=per + 5, allow_news=news)
     
-    # Normalize
+    # Normalize first so we have clean DOIs
     normalized = [_normalize_work(w, name) for w in raw_results]
+
+    # 4. FIX: Dedupe by DOI (Restore deduplication logic)
+    seen_dois = set()
+    unique_results = []
+    for w in normalized:
+        # Use DOI if available, otherwise fallback to ID
+        identifier = w.get("doi") or w.get("id")
+        if identifier in seen_dois:
+            continue
+        seen_dois.add(identifier)
+        unique_results.append(w)
+    
+    # Trim back down to the requested amount
+    final_results = unique_results[:per]
     
     return JSONResponse({
         "status": 200,
-        "results": normalized,
+        "results": final_results,
         "requested_per_journal": per,
-        "delivered": len(normalized),
+        "delivered": len(final_results),
     })
 
 if __name__ == "__main__":
