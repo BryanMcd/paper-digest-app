@@ -1,6 +1,6 @@
 # app.py
-import os, re, html, asyncio
-from typing import List, Dict, Any, Set
+import os, re, asyncio
+from typing import List, Dict, Any
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,17 +10,16 @@ app = FastAPI()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 CONTACT = os.getenv("PD_MAILTO", "your@email.here")
-UA = f"PaperDigest/0.6 (+mailto:{CONTACT})"
+UA = f"PaperDigest/0.8 (+mailto:{CONTACT})"
 HEADERS = {"User-Agent": UA, "Accept": "application/json"}
 
-# Hardcoded cache for speed, but we will now also look up unknowns dynamically
-JOURNAL_ISSNS: Dict[str, List[str]] = {
+# 1. PERFORMANCE: In-memory cache prevents repeated API lookups
+ISSN_CACHE: Dict[str, List[str]] = {
     "Nature": ["0028-0836", "1476-4687"],
     "Immunity": ["1074-7613", "1097-4180"],
     "Nature Immunology": ["1529-2908", "1529-2916"],
@@ -35,24 +34,12 @@ JOURNAL_ISSNS: Dict[str, List[str]] = {
     "Nature Aging": ["2662-8465"],
 }
 
-# Normalized set for safer checking
-ABSTRACT_LEN_WHITELIST = {
-    "nature", "science", "cell", "immunity", "nature immunology", "nature medicine",
-    "pnas", "science immunology", "science translational medicine",
-    "nature biotechnology", "nature aging", "journal of clinical investigation",
-}
-
+# Regex to clean up non-research titles locally
 NON_RESEARCH_TITLE_RE = re.compile(
     r"(?i)(news|news & views|world view|editorial|comment(ary)?|perspective|opinion|careers|podcast|interview|q.?a|toolbox|technology feature|research briefing|outlook|correspondence|matters arising|briefing)"
 )
 
-STRICT_RESEARCH = (
-    ",is_paratext:false,"
-    "type:article," 
-    "type_crossref:!editorial|news-item|comment|letter|book-review|retraction|correction|erratum|addendum"
-)
-
-# ---------------- UI (Master-Detail with Parallel Fetch) ----------------
+# ---------------- UI (Unchanged) ----------------
 INDEX_HTML = """
 <!doctype html>
 <html lang="en">
@@ -65,51 +52,19 @@ INDEX_HTML = """
     header{position:sticky;top:0;background:rgba(255,255,255,.95);border-bottom:1px solid #eee; z-index: 100;}
     .wrap{max-width:1100px;margin:0 auto;padding:16px}
     h1{font-size:22px;margin:0 0 4px}
-    /* REVERTED GRID: Back to original columns (Keywords joined the 2nd column) */
-    .controls {
-        display: grid; 
-        grid-template-columns: auto auto 1fr 300px auto; 
-        gap: 12px; 
-        align-items: end; /* Aligns everything to the bottom */
-    }
+    .controls { display: grid; grid-template-columns: auto auto 1fr 300px auto; gap: 12px; align-items: end; }
     input,button,textarea{padding:8px 10px;border:1px solid #ddd;border-radius:12px;font-family:inherit}
     button{background:#111;color:#fff;border-color:#111;cursor:pointer}
     button:disabled{opacity:0.5;cursor:not-allowed}
-    
     main{display:grid;grid-template-columns:3fr 2fr;gap:24px; position: relative;}
-    
-    aside {
-        position: fixed;
-        right: 0;
-        top: 230px;      /* Slight tweak to match new header height */
-        bottom: 0;       /* <--- FIX: Anchors it to the bottom of the viewport */
-        width: 35%; 
-        overflow-y: auto;
-        background: #fff;
-        box-shadow: -4px 0 12px rgba(0,0,0,0.05);
-        border-left: 1px solid #eee;
-        padding: 20px;
-        padding-bottom: 40px; /* Extra breathing room for the button */
-        z-index: 50;
-    }
-    
+    aside { position: fixed; right: 0; top: 230px; bottom: 0; width: 35%; overflow-y: auto; background: #fff; box-shadow: -4px 0 12px rgba(0,0,0,0.05); border-left: 1px solid #eee; padding: 20px; padding-bottom: 40px; z-index: 50; }
     @media (max-width: 900px){
       main{grid-template-columns:1fr} 
       .controls{grid-template-columns:repeat(2,minmax(0,1fr))}
-      aside {
-        display: none; 
-        position: fixed;
-        top: 0; left: 0; right: 0; bottom: 0;
-        width: 100%; height: 100%;
-        background: #fff;
-        z-index: 200;
-        padding: 20px;
-        box-shadow: none;
-      }
+      aside { display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; width: 100%; height: 100%; background: #fff; z-index: 200; padding: 20px; box-shadow: none; }
       aside.active { display: block; }
       .mobile-close { display: block !important; margin-bottom: 20px;}
     }
-
     ul{list-style:none;padding:0;margin:0}
     .card{border:1px solid #e5e5e5;border-radius:16px;padding:14px;margin:12px 0; transition: border-color 0.2s}
     .card:hover { border-color: #bbb; cursor: pointer; }
@@ -118,12 +73,7 @@ INDEX_HTML = """
     a{color:#0b57d0;text-decoration:none} a:hover{text-decoration:underline}
     .error{background:#fff5f5;color:#b00020;border:1px solid #f2c9c9;padding:10px;border-radius:12px;margin-bottom:12px;font-size:13px;white-space:pre-wrap}
     .pill{display:inline-block;padding:2px 8px;border-radius:999px;border:1px solid #ddd;font-size:12px; background:#f4f4f4}
-    textarea{
-        width:100%;
-        height:120px; 
-        box-sizing:border-box; /* Includes padding in height calc */
-        display:block;         /* Removes invisible space at the bottom */
-        }
+    textarea{ width:100%; height:120px; box-sizing:border-box; display:block; }
     .selected{box-shadow:0 0 0 2px #111; border-color:#111}
     .status{margin:10px 0;padding:8px 12px;border:1px solid #eee;border-radius:10px;background:#fafafa;font-size:13px}
     .mobile-close { display: none; width: 100%; background: #eee; color: #333; border: none; font-weight: bold;}
@@ -135,17 +85,14 @@ INDEX_HTML = """
     <h1>Paper Digest</h1>
     <div class="muted">Select a paper to view abstract.</div>
     <div class="controls" style="margin-top:10px">
-      
       <div style="display:flex; flex-direction:column; justify-content:space-between; height:110px">
         <label class="muted">Days back<br><input id="days" type="number" value="120" style="width:70px"></label>
         <label class="muted">Per journal<br><input id="per" type="number" value="20" style="width:70px"></label>
       </div>
-      
       <div style="display:flex; flex-direction:column; justify-content:space-between; height:90px">
         <label class="muted" style="cursor:pointer; display:block; padding-top:4px">
             <input id="news" type="checkbox" style="margin-right:4px; vertical-align:middle"> Include News
         </label>
-        
         <label class="muted">Keywords<br>
             <div style="display:flex; gap:4px">
                 <input id="keywords" type="text" placeholder="e.g. ARID1A" style="width:125px">
@@ -153,11 +100,8 @@ INDEX_HTML = """
             </div>
         </label>
       </div>
-      
       <div></div>
-
       <label class="muted">Journals<br><textarea id="journals" style="width:100%"></textarea></label>
-      
       <button id="fetchBtn" style="height:120px;">Fetch Papers</button>
     </div>
   </div>
@@ -189,16 +133,13 @@ const DEFAULT_JOURNALS = [
   "Science Immunology","Journal of Clinical Investigation","Nature Biotechnology",
   "Science Translational Medicine","Nature Aging","Nature"
 ];
-
 function isoSince(daysBack){ const d=new Date(); d.setDate(d.getDate()-Number(daysBack||30)); return d.toISOString().slice(0,10); }
-
 async function defFetch(path, params){
   const q = new URLSearchParams(params||{}).toString();
   const r = await fetch(`/api/${path}?${q}`);
   if(!r.ok) throw new Error(`API failed`);
   return await r.json();
 }
-
 const elStatus=document.getElementById('status');
 const elLatest=document.getElementById('latest');
 const elAbstract=document.getElementById('abstract');
@@ -211,44 +152,31 @@ const elNews=document.getElementById('news');
 const elKw=document.getElementById('keywords');
 const elJournals=document.getElementById('journals');
 const elBtn=document.getElementById('fetchBtn');
-
 elJournals.value = DEFAULT_JOURNALS.join("\\n");
-
 let records=[], selected=null;
 function setStatus(t){ elStatus.textContent = t }
-
-function closeAbstract() {
-    elAside.classList.remove('active');
-}
-
+function closeAbstract() { elAside.classList.remove('active'); }
 function renderLatest(){
   elLatest.innerHTML = records.map((p,i)=>`
     <div class="card ${selected===i?'selected':''}" data-idx="${i}">
       <div class="row"><span class="pill">${p.journal||""}</span> <span class="muted">${p.published||""}</span></div>
       <div style="margin-top:6px"><a href="${p.url}" target="_blank" onclick="event.stopPropagation()"><strong>${p.title}</strong></a></div>
-      <div class="row" style="margin-top:6px">
-        ${p.doi?`<span class="muted">DOI: ${p.doi}</span>`:""}
-      </div>
+      <div class="row" style="margin-top:6px">${p.doi?`<span class="muted">DOI: ${p.doi}</span>`:""}</div>
     </div>`).join("");
-  
   for(const card of elLatest.querySelectorAll('.card')){
     card.onclick = ()=>{ 
         selected = Number(card.getAttribute('data-idx')); 
-        renderLatest(); 
-        renderAbstract();
-        elAside.classList.add('active'); // Show mobile modal
+        renderLatest(); renderAbstract();
+        elAside.classList.add('active');
     }
   }
 }
-
 function renderAbstract(){
   if(selected==null){ elAbstract.innerHTML=""; elAbsNote.style.display='block'; return; }
   elAbsNote.style.display='none';
   const p = records[selected];
   const abs = (p.abstract || "").trim();
-  const safeAbs = abs
-    ? abs.replace(/</g,"&lt;").replace(/>/g,"&gt;")
-    : "<span class='muted'>No abstract found for this item.</span>";
+  const safeAbs = abs ? abs.replace(/</g,"&lt;").replace(/>/g,"&gt;") : "<span class='muted'>No abstract found.</span>";
   elAbstract.innerHTML = `
     <div class="card" style="border:none; padding:0; margin:0">
       <div class="row"><span class="pill">${p.journal||""}</span> <span class="muted">${p.published||""}</span></div>
@@ -260,100 +188,47 @@ function renderAbstract(){
       </div>
     </div>`;
 }
-
 function showError(msg){ elError.innerHTML = `<div class="error">${msg}</div>` }
-
 async function fetchAll(){
   try{
-    elBtn.disabled = true;
-    elError.innerHTML=""; selected=null; renderAbstract();
-    records = []; renderLatest();
-    setStatus("Fetching...");
-
-    const since = isoSince(elDays.value);
-    const per = Number(elPer.value||20);
-    const kw = elKw.value.trim();
+    elBtn.disabled = true; elError.innerHTML=""; selected=null; renderAbstract(); records = []; renderLatest(); setStatus("Fetching...");
+    const since = isoSince(elDays.value); const per = Number(elPer.value||20); const kw = elKw.value.trim();
     const list = elJournals.value.split(/\\n+/).map(s=>s.trim()).filter(Boolean);
-    
-    // Parallel Fetching
     const promises = list.map(j => {
         if(j.toLowerCase().includes("biorxiv")) return null;
         return defFetch("openalex_journal", {name:j, since:since, per:per, news:elNews.checked, keywords:kw})
-            .then(data => ({ status: 'fulfilled', value: data, journal: j }))
-            .catch(err => ({ status: 'rejected', reason: err, journal: j }));
+            .then(data => ({ status: 'fulfilled', value: data, journal: j })).catch(err => ({ status: 'rejected', reason: err, journal: j }));
     }).filter(Boolean);
-
     const results = await Promise.all(promises);
-    
-    const all = [];
-    const errors = [];
-
+    const all = [], errors = [];
+    const seen = new Set();
     for(const r of results){
         if(r.status === 'fulfilled'){
             if(r.value.results) all.push(...r.value.results);
-        } else {
-            console.error(r.reason);
-            errors.push(r.journal);
-        }
+        } else { console.error(r.reason); errors.push(r.journal); }
     }
-
-    // Deduping across journals (just in case)
-    const seen = new Set();
-    const unique = [];
     for(const item of all){
-        if(!item.id) continue;
-        if(seen.has(item.id)) continue;
+        if(!item.id || seen.has(item.id)) continue;
         seen.add(item.id);
-        
-        // Post-processing abstract structure (reconstruct from inverted index if needed)
         if(!item.abstract && item.abstract_inverted_index){
              const inv=item.abstract_inverted_index;
              if(typeof inv==="object"){
-                 const pos=[]; 
-                 for(const [word,idxs] of Object.entries(inv)){
-                     for(const i of idxs) pos.push([i,word])
-                 } 
-                 pos.sort((a,b)=>a[0]-b[0]); 
-                 item.abstract = pos.map(p=>p[1]).join(" ");
+                 const pos=[]; for(const [word,idxs] of Object.entries(inv)) for(const i of idxs) pos.push([i,word]);
+                 pos.sort((a,b)=>a[0]-b[0]); item.abstract = pos.map(p=>p[1]).join(" ");
              }
         }
-        unique.push(item);
+        records.push(item);
     }
-
-    unique.sort((a, b) => {
-      const da = new Date(a.published || 0);
-      const db = new Date(b.published || 0);
-      return db - da;
-    });
-
-    records = unique;
+    records.sort((a, b) => new Date(b.published||0) - new Date(a.published||0));
     renderLatest();
-    
-    if(errors.length > 0){
-        showError(`Failed to fetch: ${errors.join(", ")}`);
-        setStatus(`Fetched ${records.length} items (partial errors)`);
-    } else {
-        setStatus(`Fetched ${records.length} items successfully`);
-    }
-
-  }catch(e){
-    console.error(e);
-    showError(e.message||String(e));
-    setStatus("Error");
-  } finally {
-      elBtn.disabled = false;
-  }
+    if(errors.length > 0) { showError(`Failed to fetch: ${errors.join(", ")}`); setStatus(`Fetched ${records.length} items (partial errors)`); }
+    else setStatus(`Fetched ${records.length} items successfully`);
+  }catch(e){ console.error(e); showError(e.message||String(e)); setStatus("Error"); } 
+  finally { elBtn.disabled = false; }
 }
-
 [elDays, elPer, elKw, elJournals].forEach(el => {
-  el.addEventListener('keydown', (e) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-       e.preventDefault();
-       elBtn.click(); // Triggers the same click animation/logic
-    }
-  });
+  el.addEventListener('keydown', (e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); elBtn.click(); } });
 });
-
 document.getElementById('fetchBtn').onclick = fetchAll;
 </script>
 </body>
@@ -364,302 +239,154 @@ document.getElementById('fetchBtn').onclick = fetchAll;
 async def root():
     return HTMLResponse(INDEX_HTML)
 
-async def _openalex_query(params: dict):
-    q = dict(params)
-    q["mailto"] = CONTACT
-    async with httpx.AsyncClient(timeout=30.0, headers=HEADERS) as client:
-        r = await client.get("https://api.openalex.org/works", params=q)
-    return r
-
-# ------------ Helpers: Dynamic ISSN Lookup ------------
-async def _get_issns_dynamic(journal_name: str) -> List[str]:
-    if journal_name in JOURNAL_ISSNS:
-        return JOURNAL_ISSNS[journal_name]
+# ------------ Helpers: Dynamic ISSN Lookup (Cached) ------------
+async def _get_issns(journal_name: str) -> List[str]:
+    # Check cache first
+    if journal_name in ISSN_CACHE:
+        return ISSN_CACHE[journal_name]
+    
+    # Fetch from OpenAlex Sources if not known
     try:
-        async with httpx.AsyncClient(timeout=15.0, headers=HEADERS) as client:
+        async with httpx.AsyncClient(timeout=10.0, headers=HEADERS) as client:
             r = await client.get("https://api.openalex.org/sources", params={"search": journal_name, "mailto": CONTACT})
             if r.status_code == 200:
                 data = r.json()
                 results = data.get("results", [])
                 if results:
                     top = results[0]
+                    # Simple fuzzy check
                     if journal_name.lower() in (top.get("display_name") or "").lower():
-                        return top.get("issn") or []
+                        issns = top.get("issn") or []
+                        ISSN_CACHE[journal_name] = issns # Update Cache
+                        return issns
     except Exception as e:
         print(f"Error fetching ISSNs for {journal_name}: {e}")
-        return []
+    
+    # Cache failure as empty list to prevent re-fetching invalid names
+    ISSN_CACHE[journal_name] = []
     return []
 
-# ------------ Crossref helpers ------------
-JATS_TAG_RE = re.compile(r"<[^>]+>")
-
-def _jats_to_text(jats: str) -> str:
-    if not isinstance(jats, str):
-        return ""
-    txt = JATS_TAG_RE.sub("", jats)
-    return html.unescape(txt).strip()
-
-async def _crossref_recent_by_issn(issns: List[str], since_iso: str, want: int = 20, max_pages: int = 3, keywords: str = "") -> List[Dict[str, Any]]:
-    if not issns:
-        return []
-    target_issn = issns[0]
-    rows = min(200, max(50, want * 2))
-    cr_items: List[Dict[str, Any]] = []
-
-    async with httpx.AsyncClient(timeout=30.0, headers={"User-Agent": UA, "Accept": "application/json"}) as client:
-        cursor = "*"
-        pages = 0
-        while len(cr_items) < want and pages < max_pages:
-            url = f"https://api.crossref.org/journals/{target_issn}/works"
-            params = {
-                "filter": f"from-pub-date:{since_iso},type:journal-article",
-                "sort": "published",
-                "order": "desc",
-                "rows": rows,
-                "cursor": cursor,
-                "mailto": CONTACT,
-            }
-            # Add query if keywords exist
-            if keywords:
-                params["query"] = keywords
-
-            try:
-                r = await client.get(url, params=params)
-                if r.status_code != 200:
-                    break
-                j = r.json()
-                msg = j.get("message", {})
-                items = msg.get("items", []) or []
-                if not items:
-                    break
-                for it in items:
-                    doi = (it.get("DOI") or "").lower().strip()
-                    title = " ".join(it.get("title") or [])[:500]
-                    # Date extraction
-                    date_parts = (
-                        (it.get("published-online") or {}).get("date-parts")
-                        or (it.get("published-print") or {}).get("date-parts")
-                        or (it.get("issued") or {}).get("date-parts")
-                        or []
-                    )
-                    pubdate = ""
-                    if date_parts and isinstance(date_parts[0], list):
-                        parts = date_parts[0] + [1, 1, 1]
-                        y, m, d = parts[0], parts[1], parts[2]
-                        pubdate = f"{y:04d}-{m:02d}-{d:02d}"
-
-                    abstract = _jats_to_text(it.get("abstract", ""))
-                    journal = " ".join(it.get("container-title") or [])
-
-                    cr_items.append({
-                        "id": f"crossref:{doi}" if doi else None,
-                        "title": title,
-                        "abstract": abstract,
-                        "doi": f"https://doi.org/{doi}" if doi else None,
-                        "publication_date": pubdate,
-                        "host_venue": {"display_name": journal},
-                        "primary_location": {"landing_page_url": f"https://doi.org/{doi}" if doi else None},
-                        "type": "article",
-                        "type_crossref": "journal-article",
-                    })
-
-                cursor = msg.get("next-cursor") or None
-                if not cursor:
-                    break
-                pages += 1
-            except Exception:
-                break
-
-    return cr_items[:want]
-
-def _dedupe_on_ids_and_doi(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    seen_ids, seen_doi, out = set(), set(), []
-    for w in items:
-        wid = w.get("id")
-        doi = (w.get("doi") or "").replace("https://doi.org/", "").lower()
-        if wid and wid in seen_ids:
-            continue
-        if doi and doi in seen_doi:
-            continue
-        if wid:
-            seen_ids.add(wid)
-        if doi:
-            seen_doi.add(doi)
-        out.append(w)
-    return out
-
-# ------------ OpenAlex helpers ------------
-async def _collect_research(params: dict, want: int, is_research_fn, max_pages: int = 8) -> List[Dict[str, Any]]:
-    results: List[Dict[str, Any]] = []
-    cursor, pages = "*", 0
-    while len(results) < want and pages < max_pages:
-        q = dict(params)
-        q["cursor"] = cursor
-        q["per_page"] = min(200, max(50, want * 2))
-        try:
-            r = await _openalex_query(q)
-            if r.status_code != 200:
-                break
-            j = r.json()
-            raw = j.get("results", []) or []
-            if not raw:
-                break
-            filtered = [w for w in raw if is_research_fn(w)]
-            results.extend(filtered)
-            cursor = (j.get("meta") or {}).get("next_cursor")
-            if not cursor:
-                break
-            pages += 1
-        except Exception:
-            break
-    return results[:want]
-
-def is_valid_article(work: dict, allow_news: bool = False) -> bool:
-    # 1. Always filter out pure junk (Errata, Retractions, etc.)
+# ------------ Robust Verification Logic ------------
+def is_valid_article(work: dict, allow_news: bool) -> bool:
+    """
+    Strictly filters out non-research items.
+    """
+    # 1. Check Explicit Types (Crossref/OpenAlex)
     genre = (work.get("type_crossref") or work.get("type") or "").lower()
     if any(k in genre for k in ["retraction", "correction", "erratum", "addendum"]):
         return False
-
-    title = (work.get("title") or "").lower()
     
-    # 2. If News is ALLOWED, we return True here (skipping the strict checks)
     if allow_news:
         return True
 
-    # --- STRICT MODE (Research Only) ---
-    
-    # Filter out News/Editorials by Title
+    # 2. Check Title against "News" patterns
+    title = (work.get("title") or "").lower()
     if NON_RESEARCH_TITLE_RE.search(title):
         return False
-        
-    # Filter out News/Editorials by Type
+
     if any(k in genre for k in ["editorial", "news", "comment", "book-review"]):
         return False
-    
-    # Filter by Abstract Length
+
+    # 3. Check Abstract Length (CRITICAL for catching News snippets)
+    # News items often have 0 or very short abstracts (< 50 chars).
     abstract = work.get("abstract_inverted_index") or work.get("abstract")
     length = 0
     if isinstance(abstract, str):
         length = len(abstract)
     elif isinstance(abstract, dict):
-        length = len(abstract)
-
-    venue = (work.get("host_venue") or {}).get("display_name") or ""
-    if not venue:
-        venue = ((work.get("primary_location") or {}).get("source") or {}).get("display_name") or ""
-        
-    if venue.lower().strip() in ABSTRACT_LEN_WHITELIST:
-        return length >= 20 
-
-    return length >= 50
-
-# ------------ Data Normalization for Frontend ------------
-def _normalize_work(w: Dict[str, Any], fallback_journal: str = "") -> Dict[str, Any]:
-    """
-    Convert raw OpenAlex/Crossref data into the clean, flattened format
-    the frontend expects (published, journal, url, clean DOI, etc).
-    """
-    # 1. Title
-    title = w.get("title") or "[No Title]"
+        length = len(abstract) # rough proxy for word count in inverted index
     
-    # 2. DOI (Strip prefix for clean display/id, keep full for fallback)
+    # Require at least some abstract content for "Research" papers
+    return length >= 40 
+
+# ------------ OpenAlex logic (Simplified) ------------
+async def _collect_openalex(params: dict, want: int, allow_news: bool) -> List[Dict[str, Any]]:
+    results = []
+    cursor = "*"
+    
+    async with httpx.AsyncClient(timeout=30.0, headers=HEADERS) as client:
+        # Max 5 pages of fetching per journal
+        for _ in range(5):
+            if len(results) >= want:
+                break
+                
+            q = dict(params)
+            q["cursor"] = cursor
+            q["per_page"] = min(200, max(50, want * 2))
+            
+            try:
+                r = await client.get("https://api.openalex.org/works", params=q)
+                if r.status_code != 200:
+                    break
+                
+                data = r.json()
+                items = data.get("results", [])
+                if not items:
+                    break
+                
+                # Apply Robust Filter locally
+                for w in items:
+                    if is_valid_article(w, allow_news):
+                        results.append(w)
+                    
+                cursor = data.get("meta", {}).get("next_cursor")
+                if not cursor:
+                    break
+            except Exception:
+                break
+                
+    return results[:want]
+
+def _normalize_work(w: Dict[str, Any], fallback_journal: str) -> Dict[str, Any]:
     raw_doi = w.get("doi") or ""
-    clean_doi = raw_doi.replace("https://doi.org/", "")
-    
-    # 3. URL (Use DOI link if possible, else landing page)
-    url = raw_doi if raw_doi.startswith("http") else (w.get("primary_location") or {}).get("landing_page_url")
-    if not url:
-        url = w.get("id") # Fallback to OpenAlex ID
-        
-    # 4. Date
-    published = w.get("publication_date") or w.get("created_date") or ""
-    
-    # 5. Journal Name - Robust Lookup
-    # Try primary_location (standard OpenAlex)
-    journal = ((w.get("primary_location") or {}).get("source") or {}).get("display_name")
-    
-    # Try host_venue (old OpenAlex / Crossref helper)
-    if not journal:
-        journal = (w.get("host_venue") or {}).get("display_name")
-        
-    # Fallback to the search term (restores original app behavior)
-    if not journal:
-        journal = fallback_journal or "Unknown Journal"
-    
-    # 6. Abstract (Pass through inverted or text; frontend handles inverted)
-    abstract = w.get("abstract")
-    abstract_inverted_index = w.get("abstract_inverted_index")
-    
     return {
         "id": w.get("id"),
-        "title": title,
-        "published": published,
-        "journal": journal,
-        "doi": clean_doi,
-        "url": url,
-        "abstract": abstract,
-        "abstract_inverted_index": abstract_inverted_index
+        "title": w.get("title") or "[No Title]",
+        "published": w.get("publication_date") or w.get("created_date") or "",
+        "journal": ((w.get("primary_location") or {}).get("source") or {}).get("display_name") or fallback_journal,
+        "doi": raw_doi.replace("https://doi.org/", ""),
+        "url": raw_doi if raw_doi.startswith("http") else (w.get("primary_location") or {}).get("landing_page_url"),
+        "abstract": w.get("abstract"),
+        "abstract_inverted_index": w.get("abstract_inverted_index")
     }
 
 # ------------ API route ------------
 @app.get("/api/openalex_journal")
 async def api_openalex_journal(name: str, since: str, per: int = 20, news: bool = False, keywords: str = ""):
-    # 1. Resolve ISSNs
-    issns = await _get_issns_dynamic(name)
-
-    # 2. Build the OpenAlex Filter String
-    # If news is allowed, we remove the strict type exclusions
-    type_filter = "type:article,"
-    if not news:
-        type_filter += "type_crossref:!editorial|news-item|comment|letter|book-review|retraction|correction|erratum|addendum"
-    else:
-        # If allowing news, still exclude pure errors/retractions
-        type_filter += "type_crossref:!retraction|correction|erratum|addendum"
-
-    search_filter = f",is_paratext:false,{type_filter}"
+    issns = await _get_issns(name)
     
-    # NEW: Add keyword search to OpenAlex filter
-    if keywords:
-        search_filter += f",title_and_abstract.search:{keywords}"
-
-    # 3. Apply the filter to the queries
-    ox_filters = [
-        {"filter": f"locations.source.issn:{'|'.join(issns)},from_publication_date:{since}{search_filter}", "sort": "publication_date:desc"} if issns else None,
-        {"filter": f"locations.source.display_name.search:{name},from_publication_date:{since}{search_filter}", "sort": "publication_date:desc"},
-        {"filter": f"locations.source.issn:{'|'.join(issns)},from_created_date:{since}{search_filter}", "sort": "publication_date:desc"} if issns else None,
-        {"filter": f"locations.source.display_name.search:{name},from_created_date:{since}{search_filter}", "sort": "publication_date:desc"},
+    # 3. PERFORMANCE: Build filter string strictly.
+    # We still use the API to do the "heavy lifting" filtering first
+    type_filter = "type:article|review,is_paratext:false" 
+    if not news:
+        type_filter += ",type_crossref:!editorial|news-item|comment|letter|book-review|retraction|correction"
+    
+    # Base filter
+    filters = [
+        f"from_publication_date:{since}",
+        type_filter
     ]
     
-    ox_results: List[Dict[str, Any]] = []
+    if keywords:
+        filters.append(f"title_and_abstract.search:{keywords}")
 
-    # 4. Fetch OpenAlex (Use our updated validator)
-    for q in [p for p in ox_filters if p]:
-        if len(ox_results) >= per:
-            break
-        need = per - len(ox_results)
-        # Pass a lambda that includes the 'news' flag
-        ox_results += await _collect_research(q, need, lambda w: is_valid_article(w, allow_news=news), max_pages=6)
+    # OPTIMIZATION: If we have ISSNs, use them. If not, use Display Name.
+    if issns:
+        filters.append(f"locations.source.issn:{'|'.join(issns)}")
+    else:
+        filters.append(f"locations.source.display_name.search:{name}")
 
-    # 5. Crossref Fallback
-    if len(ox_results) < per and issns:
-        need = per - len(ox_results)
-        # If news is ON, we don't need to over-fetch as much (we keep more)
-        want_count = need if news else need * 2
-        
-        # Pass keywords to Crossref helper
-        cr = await _crossref_recent_by_issn(issns, since_iso=since, want=want_count, max_pages=2, keywords=keywords)
-        
-        # Filter using the same logic
-        cr_filtered = [w for w in cr if is_valid_article(w, allow_news=news)]
-        
-        ox_results += cr_filtered[:need]
+    query_params = {
+        "filter": ",".join(filters),
+        "sort": "publication_date:desc",
+        "mailto": CONTACT
+    }
 
-    merged = _dedupe_on_ids_and_doi(ox_results)
-    normalized = [_normalize_work(w, fallback_journal=name) for w in merged]
+    raw_results = await _collect_openalex(query_params, want=per, allow_news=news)
     
-    normalized.sort(key=lambda w: str(w.get("published") or ""), reverse=True)
-    normalized = normalized[:per]
-
+    # Normalize
+    normalized = [_normalize_work(w, name) for w in raw_results]
+    
     return JSONResponse({
         "status": 200,
         "results": normalized,
